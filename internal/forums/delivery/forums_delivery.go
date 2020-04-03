@@ -100,9 +100,9 @@ func (ForumD ForumDelivery) GetSortedThreads(rwContext echo.Context) error {
 }
 
 func (ForumD ForumDelivery) SetupHandlers(server *echo.Echo){
-	server.POST("/forum/create", ForumD.CreateForum)
-	server.GET("/forum/:slug/details", ForumD.GetForum)
-	server.POST("/forum/:slug/create", ForumD.CreateThread)
-	server.GET("/forum/:slug/threads", ForumD.GetSortedThreads)
-	server.GET("/forum/:slug/users", ForumD.GetForumUsers)
+	server.POST("/api/forum/create", ForumD.CreateForum)
+	server.GET("/api/forum/:slug/details", ForumD.GetForum)
+	server.POST("/api/forum/:slug/create", ForumD.CreateThread)
+	server.GET("/api/forum/:slug/threads", ForumD.GetSortedThreads)
+	server.GET("/api/forum/:slug/users", ForumD.GetForumUsers)
 }

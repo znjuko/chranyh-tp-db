@@ -51,6 +51,6 @@ func (PostD PostDelivery) UpdatePost(rwContext echo.Context) error {
 }
 
 func (PostD PostDelivery) SetupHandlers(server *echo.Echo) {
-	server.GET("/post/:id/details", PostD.GetPost)
-	server.POST("/post/:id/details", PostD.UpdatePost)
+	server.GET("/api/post/:id/details", PostD.GetPost)
+	server.POST("/api/post/:id/details", PostD.UpdatePost)
 }

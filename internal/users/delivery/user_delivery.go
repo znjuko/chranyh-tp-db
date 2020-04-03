@@ -19,11 +19,11 @@ func NewUserDelivery(userU usecase.UserUseCaseRealisation) UserDelivery {
 }
 
 func (UserD UserDelivery) SetupHandlers(server *echo.Echo) {
-	server.POST("/user/:nickname/create", UserD.CreateUser)
-	server.GET("/user/:nickname/profile", UserD.GetUser)
-	server.POST("/user/:nickname/profile", UserD.UpdateUser)
-	server.GET("/service/status", UserD.GetStatus)
-	server.POST("/service/clear", UserD.Clear)
+	server.POST("/api/user/:nickname/create", UserD.CreateUser)
+	server.GET("/api/user/:nickname/profile", UserD.GetUser)
+	server.POST("/api/user/:nickname/profile", UserD.UpdateUser)
+	server.GET("/api/service/status", UserD.GetStatus)
+	server.POST("/api/service/clear", UserD.Clear)
 }
 
 func (UserD UserDelivery) GetStatus(rwContext echo.Context) error {

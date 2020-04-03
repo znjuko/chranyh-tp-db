@@ -121,10 +121,10 @@ func (Thread ThreadDelivery) UpdateThread(rwContext echo.Context) error {
 }
 
 func (ForumD ThreadDelivery) SetupHandlers(server *echo.Echo) {
-	server.POST("/thread/:slug_or_id/create", ForumD.CreatePosts)
-	server.POST("/thread/:slug_or_id/vote", ForumD.VoteThread)
-	server.POST("/thread/:slug_or_id/details", ForumD.UpdateThread)
-	server.GET("/thread/:slug_or_id/details", ForumD.GetThread)
-	server.GET("/thread/:slug_or_id/posts", ForumD.GetPosts)
+	server.POST("/api/thread/:slug_or_id/create", ForumD.CreatePosts)
+	server.POST("/api/thread/:slug_or_id/vote", ForumD.VoteThread)
+	server.POST("/api/thread/:slug_or_id/details", ForumD.UpdateThread)
+	server.GET("/api/thread/:slug_or_id/details", ForumD.GetThread)
+	server.GET("/api/thread/:slug_or_id/posts", ForumD.GetPosts)
 
 }
