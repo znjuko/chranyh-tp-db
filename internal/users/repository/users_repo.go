@@ -16,50 +16,47 @@ func NewUserRepoRealisation(db *sql.DB) UserRepoRealisation {
 	return UserRepoRealisation{dbLauncher: db}
 }
 
-// выдаёт ошибку, если такой пользователь уже существует
 func (UserData UserRepoRealisation) CreateNewUser(userModel models.UserModel) ([]models.UserModel, error) {
 
 	allData := make([]models.UserModel,0)
-
-	row , err := UserData.dbLauncher.Query("SELECT nickname , fullname , email , about FROM users WHERE nickname = $1 OR email = $2", userModel.Nickname, userModel.Email)
-
-	if row != nil {
-		for row.Next(){
-
-			if err == nil {
-				err = errors.New("such user already exists")
-			}
-
-			existinUser := models.UserModel{
-				Nickname: "",
-				Fullname: "",
-				Email:    "",
-				About:    "",
-			}
-
-			row.Scan(&existinUser.Nickname, &existinUser.Fullname, &existinUser.Email, &existinUser.About)
-
-			allData = append(allData,existinUser)
-
-		}
-
-		row.Close()
-	}
-
-
-	if err != nil {
-		return allData , errors.New("such user already exists")
-	}
+	var err error
 
 	_, err = UserData.dbLauncher.Exec(" INSERT INTO users (nickname , fullname , email , about) VALUES($1 , $2 , $3 ,$4)", userModel.Nickname, userModel.Fullname, userModel.Email, userModel.About)
+
+	if err != nil {
+		row , err := UserData.dbLauncher.Query("SELECT nickname , fullname , email , about FROM users WHERE nickname = $1 OR email = $2", userModel.Nickname, userModel.Email)
+
+		if row != nil {
+			for row.Next(){
+
+				if err == nil {
+					err = errors.New("such user already exists")
+				}
+
+				existingUser := models.UserModel{
+					Nickname: "",
+					Fullname: "",
+					Email:    "",
+					About:    "",
+				}
+
+				row.Scan(&existingUser.Nickname, &existingUser.Fullname, &existingUser.Email, &existingUser.About)
+
+				allData = append(allData,existingUser)
+			}
+
+			row.Close()
+		}
+
+		return allData , errors.New("such user already exists")
+	}
 
 	allData = append(allData,userModel)
 
 	return allData, err
 }
 
-// выдаёт ошибку, если мы пытаемся обновить одно из полей у юзера, которое уже существует
-// sql.NoRows - если не существует такого пользователя
+
 func (UserData UserRepoRealisation) UpdateUserData(userModel models.UserModel) (models.UserModel, error) {
 
 	id := 2
@@ -92,7 +89,6 @@ func (UserData UserRepoRealisation) UpdateUserData(userModel models.UserModel) (
 	if len(reqQuery) > 1 {
 		reqQuery = reqQuery[:len(reqQuery)-1]
 	}
-
 
 	var row *sql.Row
 

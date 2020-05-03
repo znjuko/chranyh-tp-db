@@ -19,22 +19,21 @@ func (Forum ForumRepoRealisation) CreateNewForum(forum models.Forum) (models.For
 
 	userId := 0
 
-	row := Forum.dbLauncher.QueryRow("SELECT u_id, nickname FROM users WHERE nickname = $1", forum.User)
+	row := Forum.dbLauncher.QueryRow("SELECT u_id , nickname FROM users WHERE nickname = $1", forum.User)
 
 	err := row.Scan(&userId, &forum.User)
 
 	if err != nil {
+		fmt.Println("[DEBUG] error at method CreateNewForum (scan of existing user) :", err)
 		return forum, err
 	}
 
-	_, err = Forum.dbLauncher.Exec("INSERT INTO forums (slug , title, u_id) VALUES($1 , $2 , $3)", forum.Slug, forum.Title, userId)
+	_, err = Forum.dbLauncher.Exec("INSERT INTO forums (slug , title, u_nickname) VALUES($1 , $2 , $3)", forum.Slug, forum.Title, forum.User)
 
 	if err != nil {
-
-		row := Forum.dbLauncher.QueryRow("SELECT nickname , title , slug FROM forums INNER JOIN users USING(u_id) WHERE slug = $1;", forum.Slug)
+		row := Forum.dbLauncher.QueryRow("SELECT u_nickname , title , slug FROM forums WHERE slug = $1;", forum.Slug)
 
 		row.Scan(&forum.User, &forum.Title, &forum.Slug)
-		// сканировать все данные о форуме, если  err != nil
 		return forum, err
 	}
 
@@ -44,22 +43,21 @@ func (Forum ForumRepoRealisation) CreateNewForum(forum models.Forum) (models.For
 func (Forum ForumRepoRealisation) GetForum(slug string) (models.Forum, error) {
 
 	forumData := new(models.Forum)
-	fId := 0
-	row := Forum.dbLauncher.QueryRow("SELECT f_id , slug , title, nickname FROM forums INNER JOIN users USING(u_id) WHERE slug = $1", slug)
+	row := Forum.dbLauncher.QueryRow("SELECT slug , title, u_nickname, post_counter FROM forums WHERE slug = $1", slug)
 
-	err := row.Scan(&fId, &forumData.Slug, &forumData.Title, &forumData.User)
+	err := row.Scan(&forumData.Slug, &forumData.Title, &forumData.User, &forumData.Posts)
 
 	if err != nil {
+		fmt.Println("[DEBUG] error at method GetForum (scan of forum basic data) :", err)
 		return *forumData, err
 	}
 
-	row = Forum.dbLauncher.QueryRow("SELECT COUNT(DISTINCT t_id) AS thread_counter, COUNT(m_id) as message_counter FROM"+
-		" threadUF TUF LEFT JOIN messageTU MTU USING(t_id) WHERE TUF.f_id = $1", fId)
+	row = Forum.dbLauncher.QueryRow("SELECT COUNT(DISTINCT T.t_id) AS thread_counter FROM forums F INNER JOIN threads T ON(F.slug=T.f_slug)", forumData.Slug)
 
-	err = row.Scan(&forumData.Threads, &forumData.Posts)
+	err = row.Scan(&forumData.Threads)
 
 	if err != nil {
-		fmt.Println(err, "forum details")
+		fmt.Println("[DEBUG] error at method GetForum (scan of threads counter) :", err)
 	}
 
 	return *forumData, nil
@@ -67,84 +65,75 @@ func (Forum ForumRepoRealisation) GetForum(slug string) (models.Forum, error) {
 
 func (Forum ForumRepoRealisation) CreateThread(thread models.Thread) (models.Thread, error) {
 
-	userId := 0
-	forumId := 0
+	userId := int64(0)
 
 	row := Forum.dbLauncher.QueryRow("SELECT u_id , nickname FROM users WHERE nickname = $1", thread.Author)
 
 	err := row.Scan(&userId, &thread.Author)
 
 	if err != nil {
+		fmt.Println("[DEBUG] error at method CreateThread (scan of existing user) :", err)
 		return thread, err
 	}
 
-	row = Forum.dbLauncher.QueryRow("SELECT f_id , slug FROM forums WHERE slug = $1", thread.Forum)
+	row = Forum.dbLauncher.QueryRow("SELECT slug FROM forums WHERE slug = $1", thread.Forum)
 
-	err = row.Scan(&forumId, &thread.Forum)
+	err = row.Scan(&thread.Forum)
 
 	if err != nil {
+		fmt.Println("[DEBUG] error at method CreateThread (scan of existing forum) :", err)
 		return thread, err
 	}
 
 	if thread.Slug == "" {
-		row = Forum.dbLauncher.QueryRow("INSERT INTO threadUF (u_id , f_id) VALUES($1, $2) RETURNING t_id", userId, forumId)
-		err = row.Scan(&thread.Id)
+		row = Forum.dbLauncher.QueryRow("INSERT INTO threads (date , message , title , u_nickname , f_slug) "+
+			"VALUES($1, $2, $3, $4, $5) RETURNING date", thread.Created, thread.Message, thread.Title, thread.Author, thread.Forum)
 	} else {
-		row = Forum.dbLauncher.QueryRow("INSERT INTO threadUF (slug , u_id , f_id) VALUES($1, $2, $3) RETURNING t_id, slug", thread.Slug, userId, forumId)
-		err = row.Scan(&thread.Id, &thread.Slug)
+		row = Forum.dbLauncher.QueryRow("INSERT INTO threads (date , message , title , u_nickname , f_slug , slug) "+
+			"VALUES($1, $2, $3, $4, $5 ,$6) RETURNING date", thread.Created, thread.Message, thread.Title, thread.Author, thread.Forum, thread.Slug)
 	}
 
+	err = row.Scan(&thread.Created)
+
 	if err != nil {
-		row = Forum.dbLauncher.QueryRow("SELECT U.nickname,T.date,F.Slug,T.t_id,T.message,TUF.slug,T.title,T.votes FROM threadUF TUF INNER JOIN threads T ON(TUF.t_id=T.t_id) INNER JOIN users U ON(U.u_id=TUF.u_id) INNER JOIN forums F ON(F.f_id=TUF.f_id) WHERE TUF.slug = $1", thread.Slug)
+		fmt.Println("[DEBUG] error at method CreateThread (creating new forum) :", err)
+		row = Forum.dbLauncher.QueryRow("SELECT u_nickname , date ,f_slug , t_id , message , slug , title , votes FROM threads WHERE slug = $1", thread.Slug)
 		err = row.Scan(&thread.Author, &thread.Created, &thread.Forum, &thread.Id, &thread.Message, &thread.Slug, &thread.Title, &thread.Votes)
 		return thread, errors.New("thread already exist")
 	}
-	row = Forum.dbLauncher.QueryRow("INSERT INTO threads (t_id, date , message, title) VALUES($1,$2,$3,$4) RETURNING date", thread.Id, thread.Created, thread.Message, thread.Title)
-	row.Scan(&thread.Created)
+
+	Forum.dbLauncher.Exec("INSERT INTO forumUsers (f_slug,u_id) VALUES($1,$2)", thread.Forum, userId)
 	return thread, nil
 }
 
 func (Forum ForumRepoRealisation) GetThreads(forum models.Forum, limit int, since string, sort bool) ([]models.Thread, error) {
 
-	row := Forum.dbLauncher.QueryRow("SELECT f_id , slug FROM forums WHERE slug = $1", forum.Slug)
+	row := Forum.dbLauncher.QueryRow("SELECT slug FROM forums WHERE slug = $1", forum.Slug)
 
-	f_id := 0
-
-	err := row.Scan(&f_id, &forum.Slug)
+	err := row.Scan(&forum.Slug)
 
 	if err != nil {
+		fmt.Println("[DEBUG] error at method GetThreads (scanning slug of a forum) :", err)
 		return nil, err
 	}
 
-	orderStatus := ""
+	orderStatus := "<"
+	sorter := "DESC"
 
-	var rowThreads *sql.Rows
-
-	if since != "" {
-
-		sorter := ""
-
-		if sort {
-			sorter = "<"
-			orderStatus = "DESC"
-		} else {
-			sorter = ">"
-			orderStatus = "ASC"
-		}
-		sinceStatus := "WHERE T.date" + sorter + "=$2" + " "
-		rowThreads, err = Forum.dbLauncher.Query("SELECT T.t_id,T.date,T.message,T.title,T.votes,TUF.slug,F.slug,U.nickname FROM threads T INNER JOIN threadUF TUF ON(TUF.t_id=T.t_id) INNER JOIN forums F ON(TUF.f_id=F.f_id) INNER JOIN users U ON(TUF.u_id=U.u_id) "+sinceStatus+"AND F.slug = $3 "+"ORDER BY T.date "+orderStatus+" LIMIT $1", limit, since, forum.Slug)
-	} else {
-
-		if sort {
-			orderStatus = "DESC"
-		} else {
-			orderStatus = "ASC"
-		}
-
-		rowThreads, err = Forum.dbLauncher.Query("SELECT T.t_id,T.date,T.message,T.title,T.votes,TUF.slug,F.slug,U.nickname FROM threads T INNER JOIN threadUF TUF ON(TUF.t_id=T.t_id) INNER JOIN forums F ON(TUF.f_id=F.f_id) INNER JOIN users U ON(TUF.u_id=U.u_id) "+"WHERE F.slug = $2 "+"ORDER BY T.date "+orderStatus+" LIMIT $1", limit, forum.Slug)
+	if !sort {
+		sorter = ">"
+		orderStatus = "ASC"
 	}
 
-	// select date from threads WHERE date<='2020-12-22 15:33:59.613+03' ORDER BY date DESC LIMIT 10;
+	var rowThreads *sql.Rows
+	selectRow := "SELECT t_id , date , message , title , votes , slug , f_slug , u_nickname FROM threads T "
+	if since != "" {
+		sinceStatus := "WHERE date" + sorter + "=$2" + " "
+		rowThreads, err = Forum.dbLauncher.Query(selectRow+sinceStatus+"AND f_slug = $3 ORDER BY date "+orderStatus+" LIMIT $1", limit, since, forum.Slug)
+	} else {
+		rowThreads, err = Forum.dbLauncher.Query(selectRow+"WHERE f_slug = $2 "+"ORDER BY date "+orderStatus+" LIMIT $1", limit, forum.Slug)
+	}
+
 	threads := make([]models.Thread, 0)
 
 	if rowThreads != nil {
@@ -163,20 +152,18 @@ func (Forum ForumRepoRealisation) GetThreads(forum models.Forum, limit int, sinc
 	return threads, nil
 
 }
-func (Forum ForumRepoRealisation) GetForumUsers(slug string, limit int, since string, desc bool) ([]models.UserModel ,error) {
 
-	//  переписать на f_id
+func (Forum ForumRepoRealisation) GetForumUsers(slug string, limit int, since string, desc bool) ([]models.UserModel, error) {
 
-	checkRow := Forum.dbLauncher.QueryRow("SELECT f_id FROM forums WHERE slug = $1",slug)
-	fId :=0
-	err := checkRow.Scan(&fId)
+	checkRow := Forum.dbLauncher.QueryRow("SELECT slug FROM forums WHERE slug = $1", slug)
+	err := checkRow.Scan(&slug)
 
 	if err != nil {
-		return nil , err
+		fmt.Println("[DEBUG] error at method GetForumUsers (scanning slug of a forum) :", err)
+		return nil, err
 	}
 
-
-	users := make([]models.UserModel,0)
+	users := make([]models.UserModel, 0)
 	var row *sql.Rows
 
 	order := "DESC"
@@ -187,35 +174,35 @@ func (Forum ForumRepoRealisation) GetForumUsers(slug string, limit int, since st
 		ranger = ">"
 	}
 
+	selectRow := "SELECT FU.nickname , U.fullname. U.email , U.about FROM forumUsers FU INNER JOIN Users U ON(U.nickname=FU.nickname) WHERE FU.f_slug = $1 "
 	if since != "" {
 		if limit == 0 {
-			row , err = Forum.dbLauncher.Query("SELECT DISTINCT U.nickname,U.fullname,U.email,U.about FROM users U LEFT JOIN messageTU MTU ON(MTU.u_id=U.u_id) LEFT JOIN threadUF TUF ON(TUF.u_id=U.u_id OR MTU.t_id=TUF.t_id) WHERE TUF.f_id = $1 AND U.nickname "+ranger+" $2 ORDER BY U.nickname "+ order,fId,since)
+			row, err = Forum.dbLauncher.Query(selectRow + "AND U.nickname "+ranger+" $2 ORDER BY U.nickname "+order, slug, since)
 		} else {
-			row , err = Forum.dbLauncher.Query("SELECT DISTINCT U.nickname,U.fullname,U.email,U.about FROM users U LEFT JOIN messageTU MTU ON(MTU.u_id=U.u_id) LEFT JOIN threadUF TUF ON(TUF.u_id=U.u_id OR MTU.t_id=TUF.t_id) WHERE TUF.f_id = $1 AND U.nickname "+ranger+" $3 ORDER BY U.nickname "+ order+ " LIMIT $2",fId,limit,since)
+			row, err = Forum.dbLauncher.Query(selectRow+" AND U.nickname "+ranger+" $3 ORDER BY U.nickname "+order+" LIMIT $2", slug, limit, since)
 		}
 	} else {
 		if limit == 0 {
-			row , err = Forum.dbLauncher.Query("SELECT DISTINCT U.nickname,U.fullname,U.email,U.about FROM users U LEFT JOIN messageTU MTU ON(MTU.u_id=U.u_id) LEFT JOIN threadUF TUF ON(TUF.u_id=U.u_id OR MTU.t_id=TUF.t_id) WHERE TUF.f_id = $1 ORDER BY U.nickname "+ order,fId)
+			row, err = Forum.dbLauncher.Query(selectRow+" ORDER BY U.nickname "+order, slug)
 		} else {
-			row , err = Forum.dbLauncher.Query("SELECT DISTINCT U.nickname,U.fullname,U.email,U.about FROM users U LEFT JOIN messageTU MTU ON(MTU.u_id=U.u_id) LEFT JOIN threadUF TUF ON(TUF.u_id=U.u_id OR MTU.t_id=TUF.t_id) WHERE TUF.f_id = $1 ORDER BY U.nickname "+ order +" LIMIT $2",fId,limit)
+			row, err = Forum.dbLauncher.Query(selectRow+" ORDER BY U.nickname "+order+" LIMIT $2", slug, limit)
 		}
 	}
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("[DEBUG] error at method GetForumUsers (selecting users) :", err)
 	}
 
 	if row != nil {
 		for row.Next() {
-
 			user := new(models.UserModel)
 			err = row.Scan(&user.Nickname, &user.Fullname, &user.Email, &user.About)
-			users = append(users,*user)
+			users = append(users, *user)
 		}
 
 		row.Close()
 	}
 
-	return users , nil
+	return users, nil
 
 }

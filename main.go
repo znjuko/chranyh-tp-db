@@ -6,6 +6,7 @@ import (
 	fU "main/internal/forums/usecase"
 	fR "main/internal/forums/repository"
 	fD "main/internal/forums/delivery"
+	"net/http"
 
 	pU "main/internal/posts/usecase"
 	pR "main/internal/posts/repository"
@@ -86,5 +87,5 @@ func main() {
 	api.threadHandler.SetupHandlers(server)
 	api.postHandler.SetupHandlers(server)
 
-	server.Logger.Fatal(server.Start(":5000"))
+	server.Logger.Fatal(http.ListenAndServe(":5000",server))
 }
