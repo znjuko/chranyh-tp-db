@@ -21,7 +21,7 @@ func (UserData UserRepoRealisation) CreateNewUser(userModel models.UserModel) ([
 	allData := make([]models.UserModel,0)
 	var err error
 
-	_, err = UserData.dbLauncher.Exec(" INSERT INTO users (nickname , fullname , email , about) VALUES($1 , $2 , $3 ,$4)", userModel.Nickname, userModel.Fullname, userModel.Email, userModel.About)
+	_, err = UserData.dbLauncher.Exec("INSERT INTO users (nickname , fullname , email , about) VALUES($1 , $2 , $3 ,$4)", userModel.Nickname, userModel.Fullname, userModel.Email, userModel.About)
 
 	if err != nil {
 		row , err := UserData.dbLauncher.Query("SELECT nickname , fullname , email , about FROM users WHERE nickname = $1 OR email = $2", userModel.Nickname, userModel.Email)
@@ -55,7 +55,6 @@ func (UserData UserRepoRealisation) CreateNewUser(userModel models.UserModel) ([
 
 	return allData, err
 }
-
 
 func (UserData UserRepoRealisation) UpdateUserData(userModel models.UserModel) (models.UserModel, error) {
 
@@ -126,21 +125,17 @@ func (UserData UserRepoRealisation) GetUserData(nickname string) (models.UserMod
 func (UserData UserRepoRealisation) Status() (models.Status) {
 
 	statAnsw := new(models.Status)
-	row := UserData.dbLauncher.QueryRow("SELECT users , forums , threads , messages FROM counter")
+	row := UserData.dbLauncher.QueryRow("SELECT (SELECT COUNT(u_id) FROM users) as uc , (SELECT COUNT(f_id) FROM forums) AS fc , (SELECT COUNT(t_id) FROM threads) AS tc , (SELECT COUNT(m_id) FROM messages) AS mc")
 	row.Scan(&statAnsw.User,&statAnsw.Forum,&statAnsw.Thread,&statAnsw.Post)
 
 	return *statAnsw
 }
 
 func (UserData UserRepoRealisation) Clear() {
-
-	UserData.dbLauncher.Exec("UPDATE counter SET users = $1 , forums = $2 , threads = $3 , messages = $4",0,0,0,0)
-
 	UserData.dbLauncher.Exec("DELETE FROM users;")
 	UserData.dbLauncher.Exec("DELETE FROM forums;")
 	UserData.dbLauncher.Exec("DELETE FROM threads;")
 	UserData.dbLauncher.Exec("DELETE FROM messages;")
-	UserData.dbLauncher.Exec("DELETE FROM messageTU;")
 	UserData.dbLauncher.Exec("DELETE FROM voteThreads;")
-	UserData.dbLauncher.Exec("DELETE FROM threadUF;")
+	UserData.dbLauncher.Exec("DELETE FROM forumUsers;")
 }

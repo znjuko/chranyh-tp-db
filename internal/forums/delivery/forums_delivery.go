@@ -92,7 +92,7 @@ func (ForumD ForumDelivery) GetSortedThreads(rwContext echo.Context) error {
 
 	threads , err := ForumD.forumLogic.GetThreads(slug,limit,since,desc)
 
-	if err == sql.ErrNoRows {
+	if err != nil {
 		return rwContext.JSON(http.StatusNotFound, &models.Error{Message:"Can't create thread by slug: " + slug })
 	}
 

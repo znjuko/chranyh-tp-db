@@ -3,18 +3,16 @@ package main
 import (
 	"database/sql"
 	"github.com/labstack/echo"
-	fU "main/internal/forums/usecase"
-	fR "main/internal/forums/repository"
 	fD "main/internal/forums/delivery"
-	"net/http"
-
-	pU "main/internal/posts/usecase"
-	pR "main/internal/posts/repository"
+	fR "main/internal/forums/repository"
+	fU "main/internal/forums/usecase"
 	pD "main/internal/posts/delivery"
+	pR "main/internal/posts/repository"
+	pU "main/internal/posts/usecase"
 
-	tU "main/internal/threads/usecase"
-	tR "main/internal/threads/repository"
 	tD "main/internal/threads/delivery"
+	tR "main/internal/threads/repository"
+	tU "main/internal/threads/usecase"
 
 	"main/internal/users/delivery"
 	"main/internal/users/repository"
@@ -22,9 +20,9 @@ import (
 )
 
 const (
-	usernameDB = "docker"
-	passwordDB = "docker"
-	nameDB     = "docker"
+	usernameDB = "postgres"
+	passwordDB = "postgres"
+	nameDB     = "tp_db"
 )
 
 type RequestHandler struct {
@@ -61,7 +59,6 @@ func JSONMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		c.Response().Header().Set("Content-Type", "application/json; charset=utf-8")
 		return next(c)
-
 	}
 }
 
@@ -87,5 +84,5 @@ func main() {
 	api.threadHandler.SetupHandlers(server)
 	api.postHandler.SetupHandlers(server)
 
-	server.Logger.Fatal(http.ListenAndServe(":5000",server))
+	server.Logger.Fatal(server.Start(":5000"))
 }

@@ -17,7 +17,7 @@ func NewPostRepoRealisation(db *sql.DB) PostRepoRealisation {
 func (PostRepo PostRepoRealisation) GetPost(id int, flags []string) (models.AllPostData, error) {
 	msg := new(models.Message)
 	answer := models.AllPostData{}
-	row := PostRepo.dbLauncher.QueryRow("SELECT M.m_id,M.date,M.message,M.edit,M.parent,MTU.t_id,U.nickname,F.slug FROM messages M INNER JOIN messageTU MTU ON(MTU.m_id=M.m_id) INNER JOIN users U ON(U.u_id=MTU.u_id) INNER JOIN threadUF TUF ON(TUF.t_id=MTU.t_id) INNER JOIN forums F ON(F.f_id=TUF.f_id) WHERE M.m_id = $1", id)
+	row := PostRepo.dbLauncher.QueryRow("SELECT m_id , date , message , edit , parent , t_id , u_nickname , f_slug FROM messages WHERE m_id = $1", id)
 	err := row.Scan(&msg.Id, &msg.Created, &msg.Message, &msg.IsEdited, &msg.Parent, &msg.Thread, &msg.Author, &msg.Forum)
 
 	if err != nil {
@@ -40,17 +40,15 @@ func (PostRepo PostRepoRealisation) GetPost(id int, flags []string) (models.AllP
 
 		case "forum":
 			forum := new(models.Forum)
-			fId := 0
-			row = PostRepo.dbLauncher.QueryRow("SELECT F.f_id,F.slug,F.title,U.nickname FROM forums F INNER JOIN users U ON(U.u_id=F.u_id) WHERE F.slug= $1", msg.Forum)
+			row = PostRepo.dbLauncher.QueryRow("SELECT slug , title , u_nickname FROM forums WHERE slug= $1", msg.Forum)
 
-			err = row.Scan(&fId, &forum.Slug, &forum.Title, &forum.User)
+			err = row.Scan( &forum.Slug, &forum.Title, &forum.User )
 
 			if err != nil {
 				fmt.Println(err, "can't find a forum")
 			}
 
-			row = PostRepo.dbLauncher.QueryRow("SELECT COUNT(DISTINCT t_id) AS thread_counter, COUNT(m_id) as message_counter FROM"+
-				" threadUF TUF LEFT JOIN messageTU MTU USING(t_id) WHERE TUF.f_id = $1", fId)
+			row = PostRepo.dbLauncher.QueryRow("SELECT (SELECT COUNT(DISTINCT t_id) FROM threads  WHERE f_slug = $1) AS thread_counter , (SELECT COUNT(DISTINCT m_id) FROM messages WHERE f_slug = $1) as msg_counter", forum.Slug)
 
 			err = row.Scan(&forum.Threads, &forum.Posts)
 
@@ -58,7 +56,7 @@ func (PostRepo PostRepoRealisation) GetPost(id int, flags []string) (models.AllP
 
 		case "thread":
 			thread := new(models.Thread)
-			row = PostRepo.dbLauncher.QueryRow("SELECT T.t_id, T.date, T.message, T.title, T.votes, TUF.slug,U.nickname,F.slug FROM threads T INNER JOIN threadUF TUF ON(TUF.t_id=T.t_id) INNER JOIN users U ON(TUF.u_id=U.u_id) INNER JOIN forums F ON(TUF.f_id=F.f_id) WHERE T.t_id = $1", msg.Thread)
+			row = PostRepo.dbLauncher.QueryRow("SELECT t_id , date , message , title , votes , slug , u_nickname , f_slug FROM threads WHERE t_id = $1", msg.Thread)
 			err = row.Scan(&thread.Id, &thread.Created, &thread.Message, &thread.Title, &thread.Votes, &thread.Slug, &thread.Author, &thread.Forum)
 
 			if err != nil {
@@ -83,7 +81,7 @@ func (PostRepo PostRepoRealisation) UpdatePost(updateData models.Message) (model
 
 	err := row.Scan(&updateData.Id, &updateData.Created, &updateData.Message, &updateData.IsEdited, &updateData.Parent, &updateData.Author, &updateData.Forum, &updateData.Thread)
 	if err != nil {
-		fmt.Println("[DEBUG] error at method UpdatePost (updating new post with message field : "+updateData.Message+") :", err)
+		fmt.Println("[DEBUG] error at method UpdatePost (updating new post with message field : "+updateData.Message[:15]+") :", err)
 		return updateData, err
 	}
 

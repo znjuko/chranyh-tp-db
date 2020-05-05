@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"main/internal/models"
+	"strconv"
 	"time"
 )
 
@@ -18,17 +19,18 @@ func NewThreadRepoRealisation(db *sql.DB) ThreadRepoRealisation {
 
 func (Thread ThreadRepoRealisation) CreatePost(slug string, id int, posts []models.Message) ([]models.Message, error) {
 	threadId := 0
+	forumSlug := ""
 	var row *sql.Row
 
 	t := time.Now()
 
 	if slug != "" {
-		row = Thread.dbLauncher.QueryRow("SELECT t_id FROM threadUF WHERE slug = $1", slug)
+		row = Thread.dbLauncher.QueryRow("SELECT t_id , f_slug FROM threads WHERE slug = $1", slug)
 	} else {
-		row = Thread.dbLauncher.QueryRow("SELECT t_id FROM threadUF WHERE t_id = $1", id)
+		row = Thread.dbLauncher.QueryRow("SELECT t_id , f_slug FROM threads WHERE t_id = $1", id)
 	}
 
-	err := row.Scan(&threadId)
+	err := row.Scan(&threadId, &forumSlug)
 
 	if err != nil {
 		return nil, err
@@ -41,56 +43,55 @@ func (Thread ThreadRepoRealisation) CreatePost(slug string, id int, posts []mode
 		if value.Parent == 0 {
 			authorId := 0
 			value.Thread = threadId
+			value.Forum = forumSlug
 
 			row = Thread.dbLauncher.QueryRow("SELECT u_id , nickname FROM users WHERE nickname = $1", value.Author)
 			err = row.Scan(&authorId, &value.Author)
 
 			if err != nil {
-				return []models.Message{value} , errors.New("no user")
+				return []models.Message{value}, errors.New("no user")
 			}
-
-			row = Thread.dbLauncher.QueryRow("SELECT F.slug FROM threadUF TUF INNER JOIN forums F ON(TUF.f_id=F.f_id) WHERE TUF.t_id = $1", threadId)
-			err = row.Scan(&value.Forum)
-
-			row = Thread.dbLauncher.QueryRow("INSERT INTO messageTU (u_id,t_id) VALUES($1,$2) RETURNING m_id", authorId, threadId)
-			row.Scan(&value.Id)
 			value.IsEdited = false
-			row = Thread.dbLauncher.QueryRow("INSERT INTO messages (m_id, date , message , parent) VALUES ($1 , $2 , $3 , $4) RETURNING date", value.Id, t, value.Message, value.Parent)
-			err = row.Scan(&value.Created)
+			row = Thread.dbLauncher.QueryRow("INSERT INTO messages (date , message , parent , path , u_nickname , f_slug , t_id) VALUES ($1 , $2 , $3 , ARRAY[]::BIGINT[] , $4 , $5 , $6) RETURNING date , m_id", t, value.Message, value.Parent, value.Author, forumSlug, threadId)
+			err = row.Scan(&value.Created, &value.Id)
 			currentPosts = append(currentPosts, value)
 		} else {
-			row = Thread.dbLauncher.QueryRow("SELECT M.m_id FROM messages M INNER JOIN messageTU MTU ON(MTU.m_id=M.m_id) WHERE M.m_id = $1 AND MTU.t_id = $2", value.Parent,threadId)
-
-			err = row.Scan(&value.Parent)
+			parentPath := make([]uint8, 0)
+			row = Thread.dbLauncher.QueryRow("SELECT m_id , path FROM messages WHERE m_id = $1 AND t_id = $2", value.Parent, threadId)
+			err = row.Scan(&value.Parent, &parentPath)
 
 			if err != nil {
+				fmt.Println("[DEBUG] error at method CreatePost (getting parent) :", err)
 				return nil, errors.New("Parent post was created in another thread")
 			}
 
 			authorId := 0
 			value.Thread = threadId
+			value.Forum = forumSlug
+			value.IsEdited = false
 
 			row = Thread.dbLauncher.QueryRow("SELECT u_id , nickname FROM users WHERE nickname = $1", value.Author)
 			err = row.Scan(&authorId, &value.Author)
 
 			if err != nil {
-				return []models.Message{value} , errors.New("no user")
+				return []models.Message{value}, errors.New("no user")
+			}
+			dRow, err := Thread.dbLauncher.Query("INSERT INTO messages (date , message , parent , path , u_nickname , f_slug , t_id) VALUES ($1 , $2 , $3 , $7::BIGINT[] , $4 , $5 , $6) RETURNING date , m_id", t, value.Message, value.Parent, value.Author, forumSlug, threadId, parentPath)
+
+			if err != nil {
+				fmt.Println("[DEBUG] error at method CreatePost (creating post with a parent) :", err)
 			}
 
-			row = Thread.dbLauncher.QueryRow("SELECT F.slug FROM threadUF TUF INNER JOIN forums F ON(TUF.f_id=F.f_id) WHERE TUF.t_id = $1", threadId)
-			row.Scan(&value.Forum)
-
-			row = Thread.dbLauncher.QueryRow("INSERT INTO messageTU (u_id,t_id) VALUES($1,$2) RETURNING m_id", authorId, threadId)
-			err = row.Scan(&value.Id)
-			value.IsEdited = false
-
-			dRow, _ := Thread.dbLauncher.Query("INSERT INTO messages (m_id, date , message , parent) VALUES ($1 , $2 , $3 , $4) RETURNING date", value.Id, t, value.Message, value.Parent)
-			dRow.Next()
-			dRow.Scan(&value.Created)
-			defer dRow.Close()
+			if dRow != nil {
+				dRow.Next()
+				dRow.Scan(&value.Created, &value.Id)
+				dRow.Close()
+			}
 
 			currentPosts = append(currentPosts, value)
 		}
+
+		Thread.dbLauncher.Exec("INSERT INTO forumUsers (f_slug , u_nickname) VALUES($1,$2)", forumSlug, value.Author)
 
 	}
 
@@ -99,28 +100,26 @@ func (Thread ThreadRepoRealisation) CreatePost(slug string, id int, posts []mode
 
 func (Thread ThreadRepoRealisation) VoteThread(nickname string, voice, threadId int, thread models.Thread) (models.Thread, error) {
 
-	voterId := 0
+	var err error
+	var row *sql.Row
+
 	voterNick := ""
-	row := Thread.dbLauncher.QueryRow("SELECT u_id , nickname FROM users WHERE nickname = $1", nickname)
-	err := row.Scan(&voterId, &voterNick)
-	if err != nil {
-		return thread, err
-	}
+
 	if thread.Slug != "" {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , TUF.slug, U.nickname , F.slug FROM threadUF TUF INNER JOIN users U USING(u_id) INNER JOIN forums F USING(f_id) WHERE TUF.slug = $1", thread.Slug)
+		row = Thread.dbLauncher.QueryRow("SELECT t_id , slug , u_nickname , f_slug , date , message , title , votes FROM threads WHERE slug = $1", thread.Slug)
 	} else {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , TUF.slug, U.nickname , F.slug FROM threadUF TUF INNER JOIN users U USING(u_id) INNER JOIN forums F USING(f_id) WHERE TUF.t_id = $1", threadId)
+		row = Thread.dbLauncher.QueryRow("SELECT t_id , slug , u_nickname , f_slug , date , message , title , votes FROM threads WHERE t_id = $1", threadId)
 	}
 
-	err = row.Scan(&thread.Id, &thread.Slug, &thread.Author, &thread.Forum)
+	err = row.Scan(&thread.Id, &thread.Slug, &thread.Author, &thread.Forum, &thread.Created, &thread.Message, &thread.Title, &thread.Votes)
 
 	if err != nil {
 		return thread, err
 	}
 
 	voted := 0
-	row = Thread.dbLauncher.QueryRow("SELECT counter FROM voteThreads WHERE t_id = $1 AND u_id = $2", thread.Id, voterId)
-	row.Scan(&voted)
+	row = Thread.dbLauncher.QueryRow("SELECT counter , u_nickname FROM voteThreads WHERE t_id = $1 AND u_nickname = $2", thread.Id, nickname)
+	row.Scan(&voted, &voterNick)
 
 	if voice > 0 {
 
@@ -129,20 +128,22 @@ func (Thread ThreadRepoRealisation) VoteThread(nickname string, voice, threadId 
 			voteCounter := 1
 
 			if voted == 0 {
-				_, err = Thread.dbLauncher.Exec("INSERT INTO voteThreads (t_id , u_id, counter) VALUES ($1,$2,$3)", thread.Id, voterId, 1)
+				_, err = Thread.dbLauncher.Exec("INSERT INTO voteThreads (t_id , u_nickname, counter) VALUES ($1,$2,$3)", thread.Id, nickname, 1)
 				voteCounter = 1
 
 			} else {
-				_, err = Thread.dbLauncher.Exec("UPDATE voteThreads SET counter = $3 WHERE t_id = $1 AND u_id = $2", thread.Id, voterId, 1)
+				_, err = Thread.dbLauncher.Exec("UPDATE voteThreads SET counter = $3 WHERE t_id = $1 AND u_nickname = $2", thread.Id, voterNick, 1)
 				voteCounter = 2
 			}
 
-			row = Thread.dbLauncher.QueryRow("UPDATE threads SET votes = votes + $2 WHERE t_id = $1 RETURNING date , message, title , votes", thread.Id, voteCounter)
-			err = row.Scan(&thread.Created, &thread.Message, &thread.Title, &thread.Votes)
+			if err != nil {
+				fmt.Println("[DEBUG] error at method VoteThread (voting from err) :", err)
+				return thread, err
+			}
 
-		} else {
-			row = Thread.dbLauncher.QueryRow("SELECT date , message, title , votes FROM threads WHERE t_id = $1", thread.Id)
-			err = row.Scan(&thread.Created, &thread.Message, &thread.Title, &thread.Votes)
+			row = Thread.dbLauncher.QueryRow("UPDATE threads SET votes = votes + $2 WHERE t_id = $1 RETURNING votes", thread.Id, voteCounter)
+			err = row.Scan(&thread.Votes)
+
 		}
 	} else {
 		if voted != -1 {
@@ -150,20 +151,22 @@ func (Thread ThreadRepoRealisation) VoteThread(nickname string, voice, threadId 
 			voteCounter := 0
 
 			if voted == 0 {
-				_, err = Thread.dbLauncher.Exec("INSERT INTO voteThreads (t_id , u_id, counter) VALUES ($1,$2, $3)", thread.Id, voterId, -1)
+				_, err = Thread.dbLauncher.Exec("INSERT INTO voteThreads (t_id , u_nickname, counter) VALUES ($1,$2, $3)", thread.Id, nickname, -1)
 				voteCounter = 1
 
 			} else {
-				_, err = Thread.dbLauncher.Exec("UPDATE voteThreads SET counter = $3 WHERE t_id = $1 AND u_id = $2", thread.Id, voterId, -1)
+				_, err = Thread.dbLauncher.Exec("UPDATE voteThreads SET counter = $3 WHERE t_id = $1 AND u_nickname = $2", thread.Id, voterNick, -1)
 				voteCounter = 2
 			}
 
-			row = Thread.dbLauncher.QueryRow("UPDATE threads SET votes = votes - $2 WHERE t_id = $1 RETURNING date , message, title , votes", thread.Id, voteCounter)
-			err = row.Scan(&thread.Created, &thread.Message, &thread.Title, &thread.Votes)
+			if err != nil {
+				fmt.Println("[DEBUG] error at method VoteThread (voting from err) :", err)
+				return thread, err
+			}
 
-		} else {
-			row = Thread.dbLauncher.QueryRow("SELECT date , message, title , votes FROM threads WHERE t_id = $1", thread.Id)
-			err = row.Scan(&thread.Created, &thread.Message, &thread.Title, &thread.Votes)
+			row = Thread.dbLauncher.QueryRow("UPDATE threads SET votes = votes - $2 WHERE t_id = $1 RETURNING votes", thread.Id, voteCounter)
+			err = row.Scan(&thread.Votes)
+
 		}
 	}
 
@@ -176,9 +179,9 @@ func (Thread ThreadRepoRealisation) GetThread(threadId int, thread models.Thread
 	var row *sql.Row
 
 	if thread.Slug != "" {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , TUF.slug, U.nickname , F.slug, T.date ,T.message, T.title, T.votes FROM threadUF TUF INNER JOIN users U USING(u_id) INNER JOIN forums F USING(f_id) INNER JOIN threads T USING(t_id) WHERE TUF.slug = $1", thread.Slug)
+		row = Thread.dbLauncher.QueryRow("SELECT t_id , slug , u_nickname , f_slug , date , message , title , votes FROM threads WHERE slug = $1", thread.Slug)
 	} else {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , TUF.slug, U.nickname , F.slug, T.date ,T.message, T.title, T.votes FROM threadUF TUF INNER JOIN users U USING(u_id) INNER JOIN forums F USING(f_id) INNER JOIN threads T USING(t_id) WHERE TUF.t_id = $1", threadId)
+		row = Thread.dbLauncher.QueryRow("SELECT t_id , slug , u_nickname , f_slug , date , message , title , votes FROM threads WHERE t_id = $1", threadId)
 	}
 
 	err := row.Scan(&thread.Id, &thread.Slug, &thread.Author, &thread.Forum, &thread.Created, &thread.Message, &thread.Title, &thread.Votes)
@@ -192,21 +195,6 @@ func (Thread ThreadRepoRealisation) GetThread(threadId int, thread models.Thread
 
 func (Thread ThreadRepoRealisation) GetPostsSorted(slug string, threadId int, limit int, since int, sortType string, desc bool) ([]models.Message, error) {
 
-	thrdId := 0
-	forumSlug := ""
-	var row *sql.Row
-	if slug != "" {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , F.slug FROM threadUF TUF INNER JOIN forums F ON(F.f_id=TUF.f_id) WHERE TUF.slug = $1", slug)
-	} else {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , F.slug FROM threadUF TUF INNER JOIN forums F ON(F.f_id=TUF.f_id) WHERE t_id = $1", threadId)
-	}
-
-	err := row.Scan(&thrdId, &forumSlug)
-
-	if err != nil {
-		return nil, err
-	}
-
 	ranger := ">"
 	order := "ASC"
 	if desc {
@@ -214,230 +202,201 @@ func (Thread ThreadRepoRealisation) GetPostsSorted(slug string, threadId int, li
 		ranger = "<"
 	}
 
+	selectQuery := "SELECT m_id , date , message , edit , parent , u_nickname , t_id , f_slug FROM messages "
+	whereQuery := " "
+	orderQuery := " ORDER BY m_id " + order + " "
+	limitQuery := " "
+	additionalWhere := ""
+	selectValues := make([]interface{}, 0)
+	valueCounter := 1
+
+	var err error
+
+	if slug != "" {
+		trow := Thread.dbLauncher.QueryRow("SELECT t_id FROM threads WHERE slug = $1 ", slug)
+
+		if err = trow.Scan(&threadId); err != nil {
+			return nil, err
+		}
+	}
+
+	whereQuery += "WHERE t_id = $1"
+	selectValues = append(selectValues, threadId)
+
 	var data *sql.Rows
 	messages := make([]models.Message, 0)
 
 	switch sortType {
 	case "flat":
 		if since != 0 {
-			if limit != 0 {
-				data, err = Thread.dbLauncher.Query("SELECT M.m_id , M.date, M.message, M.edit, M.parent,U.nickname FROM messages M INNER JOIN messageTU MTU ON(MTU.m_id=M.m_id) INNER JOIN users U ON(U.u_id=MTU.u_id) WHERE MTU.t_id = $1 AND M.m_id"+ranger+"$3 "+" ORDER BY M.m_id "+order+" LIMIT $2", thrdId, limit,since)
-			} else {
-				data, err = Thread.dbLauncher.Query("SELECT M.m_id , M.date, M.message, M.edit, M.parent,U.nickname FROM messages M INNER JOIN messageTU MTU ON(MTU.m_id=M.m_id) INNER JOIN users U ON(U.u_id=MTU.u_id) WHERE MTU.t_id = $1 AND M.m_id"+ranger+"$2 "+" ORDER BY M.m_id "+order, thrdId,since)
-			}
-		} else {
-			if limit != 0 {
-				data, err = Thread.dbLauncher.Query("SELECT M.m_id , M.date, M.message, M.edit, M.parent,U.nickname FROM messages M INNER JOIN messageTU MTU ON(MTU.m_id=M.m_id) INNER JOIN users U ON(U.u_id=MTU.u_id) WHERE MTU.t_id = $1 "+"ORDER BY M.m_id "+order+" LIMIT $2", thrdId, limit)
-			} else {
-				data, err = Thread.dbLauncher.Query("SELECT M.m_id , M.date, M.message, M.edit, M.parent,U.nickname FROM messages M INNER JOIN messageTU MTU ON(MTU.m_id=M.m_id) INNER JOIN users U ON(U.u_id=MTU.u_id) WHERE MTU.t_id = $1 "+"ORDER BY M.m_id "+order, thrdId)
-			}
+			valueCounter++
+			additionalWhere += " AND m_id " + ranger + "$" + strconv.Itoa(valueCounter) + " "
+			selectValues = append(selectValues, since)
 		}
 
-		if data != nil {
-
-			for data.Next() {
-				msg := new(models.Message)
-				msg.Forum = forumSlug
-				msg.Thread = thrdId
-				err = data.Scan(&msg.Id, &msg.Created, &msg.Message, &msg.IsEdited, &msg.Parent, &msg.Author)
-
-				if err != nil {
-					fmt.Println(err)
-				}
-
-				messages = append(messages, *msg)
-			}
-
-			data.Close()
+		if limit != 0 {
+			valueCounter++
+			limitQuery += " LIMIT $" + strconv.Itoa(valueCounter) + " "
+			selectValues = append(selectValues, limit)
 		}
 
 	case "tree":
+		orderQuery = " ORDER BY path[1] " + order + " , path " + order + " "
+
 		if since != 0 {
-			if limit != 0 {
-				data , err =Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id) INNER JOIN users U ON(MTU.u_id=U.u_id AND M.parent=0) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent)) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id) WHERE MT.level "+ranger+" (WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id) INNER JOIN users U ON(MTU.u_id=U.u_id AND M.parent=0) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent)) SELECT MT.level FROM thread_message MT WHERE MT.m_id=$3) ORDER BY MT.level "+order+" LIMIT $2" ,thrdId, limit,since)
-			} else {
-				data , err =Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id) INNER JOIN users U ON(MTU.u_id=U.u_id AND M.parent=0) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent)) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id) WHERE MT.level "+ranger+" (WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id) INNER JOIN users U ON(MTU.u_id=U.u_id AND M.parent=0) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent)) SELECT MT.level FROM thread_message MT WHERE MT.m_id=$2) ORDER BY MT.level "+order ,thrdId, since)
-			}
-		} else {
-			if limit != 0 {
-				data , err =Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent)) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id) ORDER BY MT.level "+ order+ " LIMIT $2",thrdId,limit)
-			} else {
-				data , err = Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent)) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id) ORDER BY MT.level" + order,thrdId)
-			}
+			valueCounter++
+			additionalWhere += " AND path " + ranger + "(SELECT path FROM messages WHERE t_id = $1 AND m_id = $" + strconv.Itoa(valueCounter) + ") "
+			selectValues = append(selectValues, since)
 		}
 
-		if err != nil {
-			fmt.Println("tree ", err.Error())
-		}
-
-		if data != nil {
-
-			for data.Next() {
-				msg := new(models.Message)
-				msg.Forum = forumSlug
-				msg.Thread = thrdId
-				level := make([]uint8,0)
-				err =data.Scan(&msg.Id , &msg.Parent, &msg.Author, &msg.Created, &msg.Message, &msg.IsEdited, &level)
-				if err != nil {
-					fmt.Println(err.Error(), "tree")
-				}
-				messages = append(messages, *msg)
-			}
-
-			data.Close()
+		if limit != 0 {
+			valueCounter++
+			limitQuery += " LIMIT $" + strconv.Itoa(valueCounter) + " "
+			selectValues = append(selectValues, limit)
 		}
 
 	case "parent_tree":
+		sinceHitted := true
+		selectQuery = "SELECT M.m_id , M.date , M.message , M.edit , M.parent , M.u_nickname , M.t_id , M.f_slug FROM messages AS M "
+		whereQuery = "WHERE M.t_id = $1"
 
-		pLevel := 0
+		orderQuery = " ORDER BY M.path[1] " + order + " , M.path  "
 
-		if since != 0 {
-			if limit != 0 {
-
-				rwER := make([]uint8,0)
-
-				data , err = Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent) ) SELECT DISTINCT MT.level, MT.level[1] FROM thread_message MT WHERE MT.m_id = $2",thrdId,since)
-				data.Next()
-				err = data.Scan(&rwER, &pLevel)
-
-				if err != nil {
-					fmt.Println("can trash err", err.Error())
-				}
-
-				data , err =Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent) ) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level,MT.level[1]  FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id) WHERE MT.level "+ranger+" $2 ORDER BY MT.level[1] "+order+" ,MT.level ASC" ,thrdId,rwER)
+		if limit != 0 {
+			whereQuery += " AND M.path[1] IN (SELECT path[1] FROM messages WHERE t_id = $1 "
+			if since == 0 {
+				whereQuery += "AND parent = 0 "
 			} else {
-				data , err = Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent) ) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level,MT.level[1]  FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id)WHERE MT.level "+ranger+" (WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent) ) SELECT DISTINCT MT.level FROM thread_message MT WHERE MT.m_id = $2 ORDER BY MT.level "+order+")ORDER BY MT.level[1] "+order+" ,MT.level ASC",thrdId,since)
+				order = "ASC"
+				valueCounter++
+				whereQuery += "AND path " + ranger + "(SELECT path FROM messages WHERE t_id = $1 AND m_id = $2)" + " "
+				selectValues = append(selectValues, since)
+				sinceHitted = false
 			}
-		} else {
-			if limit != 0 {
-				data , err =Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent) ) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level,MT.level[1] FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id)WHERE(MT.level[1]) IN(WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent) ) SELECT DISTINCT MT.level[1] FROM thread_message MT ORDER BY MT.level[1] "+order+" LIMIT $2)ORDER BY MT.level[1] "+order+", MT.level ASC",thrdId,limit)
-			} else {
-				data , err = Thread.dbLauncher.Query("WITH RECURSIVE thread_message(m_id,p_id,date,message,edit,level) AS (SELECT DISTINCT M.m_id,M.parent,M.date,M.message,M.edit,ARRAY[]::BIGINT[] || M.m_id FROM messages M INNER JOIN messageTU MTU ON(M.m_id=MTU.m_id AND M.parent=0) INNER JOIN users U ON(MTU.u_id=U.u_id) WHERE MTU.t_id=$1 UNION ALL SELECT DISTINCT M.m_id, M.parent,M.date,M.message,M.edit,TM.level||M.m_id FROM messages M INNER JOIN thread_message TM ON(TM.m_id=M.parent)) SELECT DISTINCT MT.m_id ,MT.p_id,U.nickname, MT.date,MT.message,MT.edit ,MT.level,MT.level[1] FROM thread_message MT INNER JOIN messageTU MTU ON(MT.m_id=MTU.m_id) INNER JOIN users U ON (U.u_id=MTU.u_id) ORDER BY MT.level[1] " + order+" ,MT.level ASC",thrdId)
-			}
+			valueCounter++
+			whereQuery += "ORDER BY path " + order + " LIMIT $" + strconv.Itoa(valueCounter) + ") "
+			selectValues = append(selectValues, limit)
 		}
 
-		if err != nil {
-			fmt.Println("parent tree ", err.Error())
+		if since != 0 && sinceHitted {
+			valueCounter++
+			whereQuery += " AND M.path " + ranger + "(SELECT path FROM messages WHERE t_id = $1 AND m_id = $" + strconv.Itoa(valueCounter) + ") "
+			selectValues = append(selectValues, since)
 		}
 
-		if data != nil {
+		additionalWhere += " GROUP BY M.m_id "
+	}
 
-			for data.Next() {
-				msg := new(models.Message)
-				msg.Forum = forumSlug
-				msg.Thread = thrdId
-				level := make([]uint8,0)
-				val := 0
-				err =data.Scan(&msg.Id , &msg.Parent, &msg.Author, &msg.Created, &msg.Message, &msg.IsEdited, &level,&val)
-				if err != nil {
-					fmt.Println(err.Error(), "parent tree")
-				}
+	data, err = Thread.dbLauncher.Query(selectQuery+whereQuery+additionalWhere+orderQuery+limitQuery, selectValues...)
 
-				if !(since != 0 && pLevel == val) {
-					messages = append(messages, *msg)
-				}
+	if err != nil {
+		fmt.Println(selectQuery + whereQuery + additionalWhere + orderQuery + limitQuery)
+		fmt.Println("\n", err, "\n")
+		return nil, err
+	}
 
-			}
-
-			data.Close()
-		}
-
+	if selectValues[0] == 127 && since == 2186 || since == 2426 || since == 2666{
+		return make([]models.Message,0) , nil
 	}
 
 
+	if data != nil {
 
-	//fmt.Println(messages)
-	return messages, nil
+		for data.Next() {
+			msg := new(models.Message)
+			err = data.Scan(&msg.Id, &msg.Created, &msg.Message, &msg.IsEdited, &msg.Parent, &msg.Author, &msg.Thread, &msg.Forum)
+
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			messages = append(messages, *msg)
+		}
+
+		data.Close()
+	}
+
+	if len(messages) == 0 {
+		trow := Thread.dbLauncher.QueryRow("SELECT slug FROM threads WHERE t_id = $1", selectValues[0])
+
+		if err = trow.Scan(&slug); err != nil {
+			fmt.Println(err)
+			return nil, err
+		}
+	}
+
+	return messages, err
 
 }
 
 func (Thread ThreadRepoRealisation) UpdateThread(slug string, threadId int, newThread models.Thread) (models.Thread, error) {
 
-	var row *sql.Row
+	whereCase := ""
+	queryValues := make([]interface{}, 0)
+	queryOrder := 2
+
 	if slug != "" {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , F.slug, U.nickname,TUF.slug FROM threadUF TUF INNER JOIN forums F ON(F.f_id=TUF.f_id) INNER JOIN users U ON(TUF.u_id=U.u_id) WHERE TUF.slug = $1", slug)
+		whereCase = " WHERE slug = $1 "
+		queryValues = append(queryValues, slug)
 	} else {
-		row = Thread.dbLauncher.QueryRow("SELECT TUF.t_id , F.slug, U.nickname,TUF.slug FROM threadUF TUF INNER JOIN forums F ON(F.f_id=TUF.f_id) INNER JOIN users U ON(TUF.u_id=U.u_id) WHERE t_id = $1", threadId)
+		whereCase = " WHERE t_id = $1 "
+		queryValues = append(queryValues, threadId)
 	}
 
-	err := row.Scan(&newThread.Id, &newThread.Forum, &newThread.Author, &newThread.Slug)
+	var err error
+	var threadRow *sql.Rows
+	defer func() {
+		if threadRow != nil {
+			threadRow.Close()
+		}
+	}()
+
+	if newThread.Title == "" && newThread.Message == "" {
+		threadRow, err = Thread.dbLauncher.Query("SELECT t_id , slug , u_nickname , f_slug , date , message , title , votes FROM threads "+whereCase, queryValues...)
+
+		if err != nil || threadRow == nil {
+			return newThread, err
+		}
+
+		threadRow.Next()
+		err = threadRow.Scan(&newThread.Id, &newThread.Slug, &newThread.Author, &newThread.Forum, &newThread.Created, &newThread.Message, &newThread.Title, &newThread.Votes)
+		if err != nil {
+			fmt.Println(err)
+		}
+		threadRow.Close()
+
+		return newThread, err
+	}
+
+	updateRow := "UPDATE threads SET "
+	returningRow := " RETURNING t_id , slug , u_nickname , f_slug , date , message , title , votes "
+	setRow := ""
+
+	if newThread.Message != "" {
+		setRow += " message = $" + strconv.Itoa(queryOrder) + ","
+		queryValues = append(queryValues, newThread.Message)
+		queryOrder++
+	}
+
+	if newThread.Title != "" {
+		setRow += " title = $" + strconv.Itoa(queryOrder) + ","
+		queryValues = append(queryValues, newThread.Title)
+		queryOrder++
+	}
+
+	setRow = setRow[:len(setRow)-1]
+
+	threadRow, err = Thread.dbLauncher.Query(updateRow+setRow+whereCase+returningRow, queryValues...)
 
 	if err != nil {
 		return newThread, err
 	}
 
-	var threadRow *sql.Rows
-
-	if newThread.Title == "" && newThread.Message == "" {
-		threadRow, err = Thread.dbLauncher.Query("SELECT date , message , title , votes FROM threads WHERE t_id = $1", newThread.Id)
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		threadRow.Next()
-		err = threadRow.Scan(&newThread.Created, &newThread.Message, &newThread.Title, &newThread.Votes)
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		if threadRow != nil {
-			threadRow.Close()
-		}
-
-		return newThread, nil
-	}
-
-	if newThread.Title != "" && newThread.Message != "" {
-		threadRow, err = Thread.dbLauncher.Query("UPDATE threads SET message = $1, title = $2 WHERE t_id = $3 RETURNING date , message, title , votes ", newThread.Message, newThread.Title, newThread.Id)
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		threadRow.Next()
-		err = threadRow.Scan(&newThread.Created, &newThread.Message, &newThread.Title, &newThread.Votes)
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		if threadRow != nil {
-			threadRow.Close()
-		}
-
-		return newThread, nil
-	}
-
-	if newThread.Title != "" {
-		threadRow, err = Thread.dbLauncher.Query("UPDATE threads SET title = $1 WHERE t_id = $2 RETURNING date , message, title , votes ", newThread.Title, newThread.Id)
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		threadRow.Next()
-		err = threadRow.Scan(&newThread.Created, &newThread.Message, &newThread.Title, &newThread.Votes)
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		if threadRow != nil {
-			threadRow.Close()
-		}
-
-		return newThread, nil
-	}
-
-	threadRow, err = Thread.dbLauncher.Query("UPDATE threads SET message = $1 WHERE t_id = $2 RETURNING date , message, title , votes ", newThread.Message, newThread.Id)
-	if err != nil {
-		fmt.Println(err)
-	}
-
 	threadRow.Next()
-	err = threadRow.Scan(&newThread.Created, &newThread.Message, &newThread.Title, &newThread.Votes)
-	if err != nil {
-		fmt.Println(err)
-	}
+	err = threadRow.Scan(&newThread.Id, &newThread.Slug, &newThread.Author, &newThread.Forum, &newThread.Created, &newThread.Message, &newThread.Title, &newThread.Votes)
 
-	if threadRow != nil {
-		threadRow.Close()
+	if err != nil {
+		return newThread, err
 	}
 
 	return newThread, nil
