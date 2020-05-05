@@ -28,6 +28,9 @@ CREATE TABLE forums
     u_nickname CITEXT COLLATE "C" REFERENCES users (nickname) ON DELETE CASCADE
 );
 
+CREATE INDEX idx_forums_slug ON forums(slug);
+
+
 CREATE TABLE threads
 (
     t_id       BIGSERIAL PRIMARY KEY,
@@ -39,6 +42,10 @@ CREATE TABLE threads
     u_nickname CITEXT COLLATE "C" NOT NULL REFERENCES users (nickname) ON DELETE CASCADE,
     f_slug     CITEXT COLLATE "C" NOT NULL REFERENCES forums (slug) ON DELETE CASCADE
 );
+
+CREATE INDEX idx_threads_tidhash ON threads USING hash (t_id);
+CREATE INDEX idx_threads_slughash ON threads USING hash (slug);
+
 
 CREATE TABLE voteThreads
 (
@@ -62,13 +69,13 @@ CREATE TABLE messages
     t_id       BIGINT             NOT NULL REFERENCES threads ON DELETE CASCADE
 );
 
-CREATE INDEX idx_messages_mid ON messages (m_id);
+CREATE INDEX idx_messages_mid ON messages (t_id,m_id);
 
 CREATE OR REPLACE FUNCTION updater()
     RETURNS TRIGGER AS
 $BODY$
 BEGIN
-    UPDATE messages SET path = path || NEW.m_id WHERE m_id = NEW.m_id;
+    UPDATE messages SET path = path || NEW.m_id WHERE t_id = NEW.t_id AND m_id = NEW.m_id;
     RETURN NEW;
 END;
 $BODY$ LANGUAGE plpgsql;

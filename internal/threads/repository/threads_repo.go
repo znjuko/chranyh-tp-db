@@ -263,18 +263,17 @@ func (Thread ThreadRepoRealisation) GetPostsSorted(slug string, threadId int, li
 		orderQuery = " ORDER BY M.path[1] " + order + " , M.path  "
 
 		if limit != 0 {
-			whereQuery += " AND M.path[1] IN (SELECT path[1] FROM messages WHERE t_id = $1 "
+			whereQuery += " AND M.path[1] IN (SELECT DISTINCT path[1] FROM messages WHERE t_id = $1 "
 			if since == 0 {
 				whereQuery += "AND parent = 0 "
 			} else {
-				order = "ASC"
 				valueCounter++
-				whereQuery += "AND path " + ranger + "(SELECT path FROM messages WHERE t_id = $1 AND m_id = $2)" + " "
+				whereQuery += "AND path[1] " + ranger + "(SELECT path[1] FROM messages WHERE t_id = $1 AND m_id = $2)" + " "
 				selectValues = append(selectValues, since)
 				sinceHitted = false
 			}
 			valueCounter++
-			whereQuery += "ORDER BY path " + order + " LIMIT $" + strconv.Itoa(valueCounter) + ") "
+			whereQuery += "ORDER BY path[1] " + order + " LIMIT $" + strconv.Itoa(valueCounter) + ") "
 			selectValues = append(selectValues, limit)
 		}
 
@@ -284,19 +283,13 @@ func (Thread ThreadRepoRealisation) GetPostsSorted(slug string, threadId int, li
 			selectValues = append(selectValues, since)
 		}
 
-		additionalWhere += " GROUP BY M.m_id "
+		additionalWhere += " "
 	}
 
 	data, err = Thread.dbLauncher.Query(selectQuery+whereQuery+additionalWhere+orderQuery+limitQuery, selectValues...)
 
 	if err != nil {
-		fmt.Println(selectQuery + whereQuery + additionalWhere + orderQuery + limitQuery)
-		fmt.Println("\n", err, "\n")
 		return nil, err
-	}
-
-	if selectValues[0] == 127 && since == 2186 || since == 2426 || since == 2666{
-		return make([]models.Message,0) , nil
 	}
 
 
